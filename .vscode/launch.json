@@ -1,0 +1,49 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "SelfTrade: Run 100% FREE Live Paper Trader & Trainer",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run_free_live_trading.py",
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+        },
+        {
+            "name": "SelfTrade: Launch Modern Desktop GUI",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run_gui.py",
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+        },
+        {
+            "name": "SelfTrade: Run Multi-Symbol Benchmark",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run_multi_symbol.py",
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+        },
+        {
+            "name": "SelfTrade: Run Backtest & Cognitive Reasoning Demo",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run_backtest_demo.py",
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+        },
+        {
+            "name": "SelfTrade: Run PyTest Suite",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/",
+                "-v"
+            ],
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+        }
+    ]
+}

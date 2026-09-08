@@ -1,0 +1,36 @@
+//@version=5
+indicator("SelfTrade-RL Webhook Signal Exporter", overlay=true)
+
+// ============================================================================
+// SELFTRADE-RL TRADINGVIEW SIGNAL EXPORTER
+// Copy & paste this code into TradingView Pine Editor.
+// Set up Alert on "Bar Close" with Webhook URL pointing to your SelfTrade Bot.
+// ============================================================================
+
+// Indicator Inputs
+fastEmaLength = input.int(20, "Fast EMA Length")
+slowEmaLength = input.int(50, "Slow EMA Length")
+rsiLength = input.int(14, "RSI Length")
+atrLength = input.int(14, "ATR Length")
+secretKey = input.string("SELFTRADE_SECRET_KEY", "Webhook Passphrase")
+
+// Calculation
+fastEma = ta.ema(close, fastEmaLength)
+slowEma = ta.ema(close, slowEmaLength)
+rsiVal = ta.rsi(close, rsiLength)
+macdVal = ta.macd(close, 12, 26, 9)
+atrVal = ta.atr(atrLength)
+
+// Trend Direction
+isBullish = close > fastEma and fastEma > slowEma
+isBearish = close < fastEma and fastEma < slowEma
+
+// Plot Indicators on Chart
+plot(fastEma, title="EMA 20", color=color.green, linewidth=2)
+plot(slowEma, title="EMA 50", color=color.orange, linewidth=2)
+
+// Alert Signal Trigger on Bar Close
+if barstate.isconfirmed
+    // Alert Payload Schema formatted for SelfTrade-RL Webhook Listener
+    alertJson = '{"symbol": "' + syminfo.ticker + '", "time": "' + str.tostring(time) + '", "open": ' + str.tostring(open) + ', "high": ' + str.tostring(high) + ', "low": ' + str.tostring(low) + ', "close": ' + str.tostring(close) + ', "volume": ' + str.tostring(volume) + ', "rsi": ' + str.tostring(rsiVal) + ', "atr": ' + str.tostring(atrVal) + ', "passphrase": "' + secretKey + '"}'
+    alert(alertJson, alert.freq_once_per_bar_close)

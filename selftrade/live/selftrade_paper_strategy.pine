@@ -1,0 +1,40 @@
+//@version=5
+strategy("SelfTrade-RL Paper Trading & Training Strategy", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// ============================================================================
+// SELFTRADE-RL TRADINGVIEW PAPER TRADING & ONLINE TRAINING STRATEGY
+// Add this strategy to your TradingView chart and connect to TradingView Paper Trading.
+// Sends bar data & paper trade results to SelfTrade-RL Webhook Server for RL Training.
+// ============================================================================
+
+// Strategy Parameters
+fastEmaLength = input.int(20, "Fast EMA Length")
+slowEmaLength = input.int(50, "Slow EMA Length")
+secretKey     = input.string("SELFTRADE_SECRET_KEY", "Webhook Secret Key")
+
+// Technical Indicators
+fastEma = ta.ema(close, fastEmaLength)
+slowEma = ta.ema(close, slowEmaLength)
+rsiVal  = ta.rsi(close, 14)
+atrVal  = ta.atr(14)
+
+// Signal Conditions
+longCondition  = ta.crossover(fastEma, slowEma) and rsiVal > 50
+shortCondition = ta.crossunder(fastEma, slowEma) and rsiVal < 50
+
+// Execute Paper Trades inside TradingView Paper Trading Broker
+if (longCondition)
+    strategy.entry("Long", strategy.long)
+
+if (shortCondition)
+    strategy.entry("Short", strategy.short)
+
+// Plot Indicators
+plot(fastEma, title="EMA 20", color=color.green, linewidth=2)
+plot(slowEma, title="EMA 50", color=color.orange, linewidth=2)
+
+// Webhook Payload Exporter for SelfTrade-RL Bot Training
+if barstate.isconfirmed
+    // Webhook JSON Payload format
+    payload = '{"symbol": "' + syminfo.ticker + '", "close": ' + str.tostring(close) + ', "open": ' + str.tostring(open) + ', "high": ' + str.tostring(high) + ', "low": ' + str.tostring(low) + ', "volume": ' + str.tostring(volume) + ', "rsi": ' + str.tostring(rsiVal) + ', "atr": ' + str.tostring(atrVal) + ', "equity": ' + str.tostring(strategy.equity) + ', "position": ' + str.tostring(strategy.position_size) + ', "passphrase": "' + secretKey + '"}'
+    alert(payload, alert.freq_once_per_bar_close)
