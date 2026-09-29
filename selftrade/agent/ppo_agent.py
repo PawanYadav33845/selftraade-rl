@@ -77,7 +77,15 @@ class PPOAgent:
         self.value_coef = value_coef
         self.entropy_coef = entropy_coef
         self.version_tag = version_tag
-        self.device = torch.device(device)
+        if device in ("auto", "cpu", None):
+            is_cuda = False
+            try:
+                is_cuda = torch.cuda.is_available()
+            except Exception:
+                is_cuda = False
+            self.device = torch.device("cuda" if is_cuda else "cpu")
+        else:
+            self.device = torch.device(device)
 
         self.network = ActorCriticNetwork(state_dim, action_dim).to(self.device)
         self.optimizer = optim.Adam(self.network.parameters(), lr=lr)
@@ -120,17 +128,19 @@ class PPOAgent:
         """
         Executes PPO update step over a sampled batch.
         """
-        states = batch["states"].to(self.device)
-        actions = batch["actions"].to(self.device)
-        rewards = batch["rewards"].to(self.device)
-        old_log_probs = batch["log_probs"].to(self.device)
-        old_values = batch["values"].to(self.device)
+        states = batch["states"].to(self.device).detach()
+        actions = batch["actions"].to(self.device).detach().view(-1)
+        rewards = batch["rewards"].to(self.device).detach().view(-1)
+        old_log_probs = batch["log_probs"].to(self.device).detach().view(-1)
+        old_values = batch["values"].to(self.device).detach().view(-1)
 
         # Target returns calculation (Monte-Carlo / 1-step target for batch simplicity)
-        returns = rewards + self.gamma * old_values
-        advantages = returns - old_values
-        if len(advantages) > 1:
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        with torch.no_grad():
+            returns = (rewards + self.gamma * old_values).detach().view(-1)
+            advantages = (returns - old_values).detach().view(-1)
+            if len(advantages) > 1:
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            advantages = advantages.detach().view(-1)
 
         policy_losses = []
         value_losses = []
@@ -138,23 +148,24 @@ class PPOAgent:
 
         for _ in range(ppo_epochs):
             logits, values = self.network(states)
-            values = values.squeeze(-1)
+            values = values.view(-1)
             dist = Categorical(logits=logits)
 
-            new_log_probs = dist.log_prob(actions)
+            new_log_probs = dist.log_prob(actions).view(-1)
             entropy = dist.entropy().mean()
 
             # PPO Clipped Objective
             ratios = torch.exp(new_log_probs - old_log_probs)
             surr1 = ratios * advantages
             surr2 = torch.clamp(ratios, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * advantages
-            policy_loss = -torch.min(surr1, surr2).mean()
+            surr_loss = torch.where(surr1 < surr2, surr1, surr2)
+            policy_loss = -surr_loss.mean()
 
             # Value Loss
             value_loss = nn.functional.mse_loss(values, returns)
 
             # Total Loss
-            total_loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy
+            total_loss = policy_loss + (self.value_coef * value_loss) - (self.entropy_coef * entropy)
 
             self.optimizer.zero_grad()
             total_loss.backward()

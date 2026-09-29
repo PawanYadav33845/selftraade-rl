@@ -1,12 +1,14 @@
 """
 Multi-Strategy Synthesis Engine.
-Combines 6 Famous and Price-Action Rudimentary Strategies into a unified Strategy Confluence Score:
+Combines 8 Famous and Price-Action Rudimentary Strategies simultaneously into a unified Strategy Confluence Score:
 1. EMA Trend Crossover (20/50/200)
 2. RSI Overbought / Oversold
 3. MACD Momentum
-4. Bollinger Bands Volatility
+4. Bollinger Bands Volatility Reversion
 5. Support & Resistance Pivot Rejection
 6. Price Action Candlestick Patterns
+7. Stochastic Oscillator (%K/%D)
+8. Keltner Volatility Channel Breakout
 """
 
 from typing import Dict, Any, List
@@ -35,9 +37,15 @@ class StrategyEnsemble:
         self.bb_window = bb_window
         self.bb_std = bb_std
 
-    def evaluate_strategies(self, df: pd.DataFrame, market_struct: MarketStructure) -> EnsembleEvaluationResult:
+    def evaluate_strategies(
+        self,
+        df: pd.DataFrame,
+        market_struct: MarketStructure,
+        symbol: str = "",
+    ) -> EnsembleEvaluationResult:
         """
-        Evaluates 6 famous and rudimentary strategies across recent price series.
+        Evaluates 8 famous and rudimentary strategies simultaneously across recent price series,
+        applying category-optimized indicator weights for Commodities (Gold, Silver) and Crypto (BTCUSD).
         """
         if len(df) < 20:
             return EnsembleEvaluationResult(
@@ -53,7 +61,7 @@ class StrategyEnsemble:
         votes: Dict[str, float] = {}
 
         # 1. Strategy 1: EMA Trend Crossover (20/50/200)
-        votes["EMA_Trend_Cross"] = float(market_struct.trend_score)
+        votes["EMA_Trend_Cross"] = float(market_struct.trend_score) if market_struct is not None else 0.0
 
         # 2. Strategy 2: RSI Overbought / Oversold (14)
         delta = data["close"].diff()
@@ -96,7 +104,7 @@ class StrategyEnsemble:
 
         # 5. Strategy 5: Support & Resistance Pivot Rejection
         sr_score = 0.0
-        if market_struct.support_level > 0.0:
+        if market_struct is not None and market_struct.support_level > 0.0:
             dist_sup = (curr_close - market_struct.support_level) / curr_close
             dist_res = (market_struct.resistance_level - curr_close) / curr_close
 
@@ -108,21 +116,96 @@ class StrategyEnsemble:
 
         # 6. Strategy 6: Price Action Candlestick Patterns
         pa_score = 0.0
-        if market_struct.candlestick_pattern in [CandlestickPattern.BULLISH_ENGULFING, CandlestickPattern.HAMMER_PINBAR]:
-            pa_score = 1.0
-        elif market_struct.candlestick_pattern in [CandlestickPattern.BEARISH_ENGULFING, CandlestickPattern.SHOOTING_STAR]:
-            pa_score = -1.0
+        if market_struct is not None:
+            if market_struct.candlestick_pattern in [CandlestickPattern.BULLISH_ENGULFING, CandlestickPattern.HAMMER_PINBAR]:
+                pa_score = 1.0
+            elif market_struct.candlestick_pattern in [CandlestickPattern.BEARISH_ENGULFING, CandlestickPattern.SHOOTING_STAR]:
+                pa_score = -1.0
         votes["Price_Action_Patterns"] = pa_score
 
-        # Calculate Overall Ensemble Confluence Score
-        scores = list(votes.values())
-        overall_score = float(np.mean(scores))
+        # 7. Strategy 7: Stochastic Oscillator (%K/%D 14)
+        low_14 = data["low"].rolling(14).min()
+        high_14 = data["high"].rolling(14).max()
+        stoch_k = 100.0 * (data["close"] - low_14) / (high_14 - low_14 + 1e-8)
+        k_val = float(stoch_k.iloc[-1])
 
-        active_count = sum(1 for s in scores if abs(s) > 0.2)
+        stoch_score = 0.0
+        if k_val < 20.0:
+            stoch_score = 1.0  # Oversold
+        elif k_val > 80.0:
+            stoch_score = -1.0  # Overbought
+        votes["Stochastic_Oscillator"] = stoch_score
 
-        if overall_score > 0.25:
+        # 8. Strategy 8: Keltner Volatility Channel Breakout
+        tr = np.maximum(
+            data["high"] - data["low"],
+            np.maximum(
+                abs(data["high"] - data["close"].shift(1)),
+                abs(data["low"] - data["close"].shift(1)),
+            ),
+        )
+        atr_14 = float(tr.rolling(14).mean().iloc[-1])
+        ema_20 = float(data["close"].ewm(span=20, adjust=False).mean().iloc[-1])
+
+        keltner_upper = ema_20 + 1.5 * atr_14
+        keltner_lower = ema_20 - 1.5 * atr_14
+
+        keltner_score = 0.0
+        if curr_close > keltner_upper:
+            keltner_score = 1.0  # Upper breakout -> Bullish momentum
+        elif curr_close < keltner_lower:
+            keltner_score = -1.0  # Lower breakout -> Bearish momentum
+        votes["Keltner_Channel_Breakout"] = keltner_score
+
+        # Category-Specific Strategy Optimization Weighting Matrix
+        category_weights = {
+            "XAUUSD": {  # Gold: Trend & Volatility Breakout Priority
+                "EMA_Trend_Cross": 1.3,
+                "Keltner_Channel_Breakout": 1.4,
+                "Support_Resistance_Pivot": 1.2,
+                "MACD_Momentum": 1.1,
+                "Price_Action_Patterns": 1.1,
+                "RSI_Oversold_Overbought": 0.9,
+                "Bollinger_Bands_Reversion": 0.8,
+                "Stochastic_Oscillator": 0.8,
+            },
+            "XAGUSD": {  # Silver: Mean Reversion & Oscillator Priority
+                "Bollinger_Bands_Reversion": 1.4,
+                "Stochastic_Oscillator": 1.3,
+                "RSI_Oversold_Overbought": 1.2,
+                "Support_Resistance_Pivot": 1.2,
+                "Price_Action_Patterns": 1.1,
+                "EMA_Trend_Cross": 0.9,
+                "MACD_Momentum": 0.9,
+                "Keltner_Channel_Breakout": 0.8,
+            },
+            "BTCUSD": {  # Crypto: Momentum & Trend Continuation Priority
+                "MACD_Momentum": 1.4,
+                "EMA_Trend_Cross": 1.3,
+                "Price_Action_Patterns": 1.3,
+                "Keltner_Channel_Breakout": 1.2,
+                "Stochastic_Oscillator": 1.0,
+                "RSI_Oversold_Overbought": 0.9,
+                "Support_Resistance_Pivot": 0.9,
+                "Bollinger_Bands_Reversion": 0.8,
+            },
+        }
+
+        weights_dict = category_weights.get(symbol.upper(), {})
+        weighted_scores = []
+        weight_sum = 0.0
+
+        for strat_name, raw_vote in votes.items():
+            w = weights_dict.get(strat_name, 1.0)
+            weighted_scores.append(raw_vote * w)
+            weight_sum += w
+
+        overall_score = float(np.sum(weighted_scores) / (weight_sum + 1e-8))
+        active_count = sum(1 for s in votes.values() if abs(s) > 0.2)
+
+        if overall_score > 0.20:
             bias = "BULLISH"
-        elif overall_score < -0.25:
+        elif overall_score < -0.20:
             bias = "BEARISH"
         else:
             bias = "NEUTRAL"

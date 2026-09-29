@@ -115,6 +115,10 @@ class TradeJournal:
 
     load_journal = load
 
+    def get_all_trades(self) -> List[Dict[str, Any]]:
+        """Returns all logged trade diary records as a list of dictionaries."""
+        return [e.to_dict() for e in self.entries]
+
     def export_csv(self, csv_path: str = "journal/trade_journal.csv") -> str:
         """Exports trade diary records to CSV format."""
         if not self.entries:

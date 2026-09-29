@@ -176,8 +176,28 @@ class TradingEnv(gym.Env):
 
         # Logarithmic return reward
         eps = 1e-8
-        log_return = np.log((self.portfolio_value + eps) / (self.prev_portfolio_value + eps))
-        reward = float(log_return - self.cost_penalty_lambda * c_trans_ratio)
+        log_return = float(np.log((self.portfolio_value + eps) / (self.prev_portfolio_value + eps)))
+        reward = log_return - float(self.cost_penalty_lambda * c_trans_ratio)
+
+        # Shaped Reward: Position Drawdown & Holding Reward based on ATR
+        current_row = self.df.iloc[self.current_step]
+        atr_val = float(current_row.get("atr_norm", 0.01))
+        if self.position > 0.0 and self.position_entry_price > 0.0:
+            unrealized_pnl_pct = (next_price - self.position_entry_price) / self.position_entry_price
+            if unrealized_pnl_pct < 0:
+                reward -= 0.05 * min(abs(unrealized_pnl_pct) / (atr_val + 1e-5), 2.0)
+            else:
+                reward += 0.05 * min(unrealized_pnl_pct / (atr_val + 1e-5), 2.0)
+
+        # Trade Exit Bonus/Penalty
+        if action == 2 and executed_trade:
+            if self.trades_history:
+                last_trade = self.trades_history[-1]
+                pnl = (sell_price - self.position_entry_price) / (self.position_entry_price + 1e-8) if self.position_entry_price > 0 else 0.0
+                if pnl > 0:
+                    reward += 0.5 + min(pnl * 10.0, 1.0)
+                else:
+                    reward -= 0.5 + min(abs(pnl) * 10.0, 1.0)
 
         # Check Termination / Truncation
         terminated = False

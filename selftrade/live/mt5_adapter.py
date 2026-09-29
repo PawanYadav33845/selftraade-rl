@@ -83,55 +83,89 @@ class MT5BrokerAdapter(BaseBrokerAdapter):
         self.default_lot_size = default_lot_size
         self.is_connected = False
         self._symbol_cache: Dict[str, str] = {}
+        self.last_connect_attempt = 0.0
 
     def connect(self) -> bool:
         """
-        Initializes MT5 terminal and connects to demo account.
+        Initializes MT5 terminal and connects to demo account with safe error handling.
         Re-uses existing MT5 session automatically if terminal is already running and logged in.
         """
         init_kwargs = {}
         if self.path:
             init_kwargs["path"] = self.path
 
-        if not mt5.initialize(**init_kwargs):
-            err_code, err_msg = mt5.last_error()
-            logger.error(f"MT5 initialize failed: {err_code} - {err_msg}")
-            self.is_connected = False
-            return False
-
-        account_info = mt5.account_info()
-        # 1. If terminal is already running & authorized to an active account in MT5 GUI, use active account!
-        if account_info is not None:
-            if not self.account or int(self.account) == 123456 or account_info.login == int(self.account):
-                logger.info(f"Connected to active MT5 terminal session. Account: {account_info.login}, Server: {account_info.server}")
-                self.is_connected = True
-                return True
-
-        # 2. If specific non-test account credentials were provided, log in
-        if self.account and self.password and self.server and int(self.account) != 123456:
-            authorized = mt5.login(
-                login=int(self.account),
-                password=str(self.password),
-                server=str(self.server),
-            )
-            if authorized:
-                save_credentials(int(self.account), str(self.password), str(self.server))
-                logger.info(f"MT5 Logged in successfully to account {self.account}")
-                self.is_connected = True
-                return True
-            else:
+        try:
+            if not mt5.initialize(**init_kwargs):
                 err_code, err_msg = mt5.last_error()
-                logger.error(f"MT5 login failed for account {self.account}: {err_code} - {err_msg}")
+                logger.error(f"MT5 initialize failed: {err_code} - {err_msg}")
+                self.is_connected = False
+                return False
 
-        # 3. Fallback check: if already connected to any session
-        account_info = mt5.account_info()
-        if account_info is not None:
-            logger.info(f"Using active MT5 session. Account: {account_info.login}, Server: {account_info.server}")
-            self.is_connected = True
-            return True
+            account_info = mt5.account_info()
+            acc_num = None
+            if self.account is not None:
+                try:
+                    acc_num = int(self.account)
+                except (ValueError, TypeError):
+                    acc_num = None
 
-        logger.error("Failed to connect or retrieve MT5 account info.")
+            # 1. If terminal is already running & authorized to an active account in MT5 GUI, use active account!
+            if account_info is not None:
+                if acc_num is None or acc_num == 123456 or account_info.login == acc_num:
+                    logger.info(f"Connected to active MT5 terminal session. Account: {account_info.login}, Server: {account_info.server}")
+                    self.is_connected = True
+                    return True
+
+            # 2. If specific non-test account credentials were provided, log in
+            if acc_num and self.password and self.server and acc_num != 123456:
+                authorized = mt5.login(
+                    login=acc_num,
+                    password=str(self.password),
+                    server=str(self.server),
+                )
+                if authorized:
+                    save_credentials(acc_num, str(self.password), str(self.server))
+                    logger.info(f"MT5 Logged in successfully to account {acc_num}")
+                    self.is_connected = True
+                    return True
+                else:
+                    err_code, err_msg = mt5.last_error()
+                    logger.error(f"MT5 login failed for account {acc_num}: {err_code} - {err_msg}")
+
+            # 3. Fallback check: if already connected to any session
+            account_info = mt5.account_info()
+            if account_info is not None:
+                logger.info(f"Using active MT5 session. Account: {account_info.login}, Server: {account_info.server}")
+                self.is_connected = True
+                return True
+
+        except Exception as e:
+            logger.error(f"Exception during MT5 connection attempt: {e}")
+
         self.is_connected = False
+        return False
+
+    def ensure_connected(self, max_retries: int = 3) -> bool:
+        """
+        Ensures MT5 terminal is connected. Attempts auto-reconnect if connection drops.
+        """
+        if self.is_connected:
+            account_info = mt5.account_info()
+            if account_info is not None:
+                return True
+
+        # Connection dropped or not initialized - attempt reconnection with rate limiting
+        now = time.time()
+        if now - self.last_connect_attempt < 2.0:
+            return self.is_connected
+
+        self.last_connect_attempt = now
+        for attempt in range(1, max_retries + 1):
+            logger.info(f"Attempting MT5 auto-reconnect ({attempt}/{max_retries})...")
+            if self.connect():
+                return True
+            time.sleep(0.3)
+
         return False
 
     def disconnect(self) -> None:
@@ -352,3 +386,22 @@ class MT5BrokerAdapter(BaseBrokerAdapter):
             "sl": stop_loss,
             "tp": take_profit,
         }
+
+    def modify_position_sltp(self, symbol: str, ticket: int, stop_loss: float, take_profit: float) -> bool:
+        """Modifies SL/TP for an active MT5 position."""
+        if not self.is_connected:
+            if not self.connect():
+                return False
+        resolved_symbol = self.resolve_symbol(symbol)
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": ticket,
+            "symbol": resolved_symbol,
+            "sl": float(stop_loss),
+            "tp": float(take_profit),
+        }
+        result = mt5.order_send(request)
+        if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+            logger.info(f"MT5 Position {ticket} ({resolved_symbol}) SL/TP modified: SL=${stop_loss:,.2f}, TP=${take_profit:,.2f}")
+            return True
+        return False

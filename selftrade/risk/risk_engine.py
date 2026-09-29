@@ -4,6 +4,7 @@ Enforces non-overridable execution rules outside the neural network:
 1. Hard Stop-Loss (-2.0% per position)
 2. Daily Circuit Breaker (-5.0% portfolio drawdown cap)
 3. Order & Capital Validation
+4. Dynamic Trailing Stop & Break-Even Risk Controls
 """
 
 from typing import Dict, Any, Tuple
@@ -33,11 +34,13 @@ class DeterministicRiskEngine:
         max_daily_drawdown_pct: float = 0.05,    # 5.0% 24h portfolio drawdown cap
         circuit_breaker_cooldown: int = 24,      # 24 steps cooldown period
         min_cash_ratio_for_buy: float = 0.01,    # Minimum cash needed to initiate buy
+        max_concurrent_trades: int = 10,         # Maximum active open positions portfolio-wide
     ) -> None:
         self.max_stop_loss_pct = float(max_stop_loss_pct)
         self.max_daily_drawdown_pct = float(max_daily_drawdown_pct)
         self.circuit_breaker_cooldown = int(circuit_breaker_cooldown)
         self.min_cash_ratio_for_buy = float(min_cash_ratio_for_buy)
+        self.max_concurrent_trades = int(max_concurrent_trades)
 
         # Circuit Breaker tracking
         self.portfolio_window = deque(maxlen=24)
@@ -115,6 +118,19 @@ class DeterministicRiskEngine:
 
         # 4. Rule 3: CAPITAL & ORDER VALIDATION CHECK
         if proposed_action == 1:  # BUY request
+            total_open_trades = env_info.get("total_open_trades", 0)
+            if total_open_trades >= self.max_concurrent_trades:
+                safe_action = 0  # Override to HOLD
+                is_overridden = True
+                reason = f"MAX_CONCURRENT_TRADES_CAP_REACHED ({total_open_trades} >= {self.max_concurrent_trades})"
+                return RiskEvaluationResult(
+                    original_action=proposed_action,
+                    safe_action=safe_action,
+                    is_overridden=is_overridden,
+                    override_reason=reason,
+                    circuit_breaker_active=circuit_breaker_active,
+                )
+
             cash_ratio = cash / (portfolio_value + 1e-8)
             if cash_ratio < self.min_cash_ratio_for_buy or cash < 1.0:
                 safe_action = 0  # Override to HOLD
@@ -135,3 +151,63 @@ class DeterministicRiskEngine:
             override_reason=reason,
             circuit_breaker_active=circuit_breaker_active,
         )
+
+    def update_trailing_stop_and_be(
+        self,
+        symbol: str,
+        side: str,
+        current_price: float,
+        entry_price: float,
+        current_sl: float,
+        current_tp: float,
+        be_trigger_price: float,
+        atr: float,
+        holding_mode: str = "SCALP_QUICK",
+    ) -> Tuple[float, bool, str]:
+        """
+        Updates Stop Loss dynamically:
+        1. Break-Even Shift: Once price reaches be_trigger_price (+1.0 Risk), shift SL to entry_price.
+        2. Dynamic Trailing SL: If in TREND_BIG_PROFIT mode, trail SL behind price (1.5 * ATR distance).
+
+        Returns: (new_stop_loss, is_sl_modified, reason_string)
+        """
+        new_sl = current_sl
+        modified = False
+        reason = "NO_CHANGE"
+
+        if entry_price <= 0.0 or current_sl <= 0.0:
+            return current_sl, False, reason
+
+        safe_atr = max(atr, current_price * 0.005)
+
+        if side.upper() == "BUY":
+            # 1. Break-Even Trigger for BUY
+            if be_trigger_price > 0.0 and current_price >= be_trigger_price and current_sl < entry_price:
+                new_sl = entry_price
+                modified = True
+                reason = "BREAK_EVEN_PROTECTION_ACTIVATED"
+
+            # 2. Dynamic Trailing SL for BUY (TREND_BIG_PROFIT)
+            if holding_mode == "TREND_BIG_PROFIT":
+                trail_candidate = current_price - (1.5 * safe_atr)
+                if trail_candidate > new_sl:
+                    new_sl = trail_candidate
+                    modified = True
+                    reason = "DYNAMIC_TRAILING_STOP_RAISED"
+
+        elif side.upper() == "SELL":
+            # 1. Break-Even Trigger for SELL
+            if be_trigger_price > 0.0 and current_price <= be_trigger_price and (current_sl > entry_price or current_sl == 0.0):
+                new_sl = entry_price
+                modified = True
+                reason = "BREAK_EVEN_PROTECTION_ACTIVATED"
+
+            # 2. Dynamic Trailing SL for SELL (TREND_BIG_PROFIT)
+            if holding_mode == "TREND_BIG_PROFIT":
+                trail_candidate = current_price + (1.5 * safe_atr)
+                if new_sl == 0.0 or trail_candidate < new_sl:
+                    new_sl = trail_candidate
+                    modified = True
+                    reason = "DYNAMIC_TRAILING_STOP_LOWERED"
+
+        return float(new_sl), modified, reason

@@ -1,0 +1,70 @@
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Credentials & Sensitive Configurations
+selftrade/live/mt5_credentials.json
+*.env
+.env.*
+
+# Generated Logs, Journals, & Session Reports
+journal/trade_journal.json
+journal/trade_journal.csv
+reports/session_learning_report_*.md
+reports/session_learning_report_*.txt
+reports/latest_learning_report.md
+reports/latest_learning_report.txt
+*.log
+
+# PyTorch Model Checkpoints & Datasets
+*.pt
+*.pth
+*.onnx
+models/saved/
+checkpoints/
+
+# IDE & Editor Configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+Desktop.ini
